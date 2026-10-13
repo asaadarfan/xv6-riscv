@@ -1,0 +1,48 @@
+Lab: system calls -- answers
+
+1. Looking at the backtrace, which function called syscall()?
+
+   usertrap(), in kernel/trap.c, calls syscall() (at kernel/trap.c:68)
+   when it handles an environment-call-from-user-mode trap
+   (r_scause() == 8).
+
+2. What is the value of p->trapframe->a7 and what does that value
+   represent?
+
+   a7 is 15.  a7 holds the system-call number, i.e. it tells the kernel
+   which system call the user program is requesting.  The first user
+   program xv6 runs is user/init.c, whose first action is
+   open("console", O_RDWR); 15 is SYS_open in kernel/syscall.h, so a7 =
+   15 identifies this as the open() system call.
+
+3. What was the previous mode that the CPU was in (from sstatus)?
+
+   User mode.  The SPP (Supervisor Previous Privilege) bit of sstatus is
+   0, which means the trap was taken from user mode.  (If SPP were 1 the
+   previous mode would have been supervisor mode.)
+
+4. Panic experiment (num = *(int *)0;): write down the assembly
+   instruction the kernel panics at, and which register holds num.
+
+   The faulting instruction is:
+
+       lw a3,0(zero)       # load a 32-bit word from address 0
+
+   It reads from address 0 and faults.  The variable num corresponds to
+   register a3: the loaded word is placed in a3 and then used as the
+   index into the syscalls[] table.
+
+5. Why does the kernel crash?
+
+   Address 0 is not mapped in the kernel's address space, so the load
+   from address 0 triggers a load page fault.  The panic printed
+   scause=0xd, and 0xd (13) is "Load page fault" in the RISC-V
+   privileged spec, confirming the cause.  A page fault taken in the
+   kernel is unexpected, so kerneltrap() cannot handle it and the kernel
+   panics ("panic: kerneltrap").
+
+6. What is the name and pid of the process that was running when the
+   kernel panicked?
+
+   The process is init, with pid 1 -- it is the first user process, and
+   the panic happens on the very first system call it makes.

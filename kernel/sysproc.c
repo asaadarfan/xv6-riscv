@@ -98,6 +98,40 @@ sys_kill(void)
   return kkill(pid);
 }
 
+// interpose(mask, path): sandbox the calling process.  The bits of
+// mask name system calls (by their SYS_ number) that should be
+// rejected.  A rejected open or exec is still permitted when it uses
+// the allowed pathname.  Restrictions can only be tightened: the mask
+// is OR'd into whatever is already set, and the allowed path is fixed
+// by the first call, so a sandboxed program cannot relax its own
+// confinement by calling interpose() again.
+uint64
+sys_interpose(void)
+{
+  int mask;
+  char path[MAXPATH];
+  struct proc *p = myproc();
+  int len;
+
+  argint(0, &mask);
+
+  // The mask may only add restrictions, never remove them.
+  p->sbmask |= mask;
+
+  // Only the first interpose() call sets the allowed pathname.  A path
+  // of "-" (or an unreadable argument) means "no path is exempt".
+  if (!p->sbactive) {
+    len = argstr(1, path, MAXPATH);
+    if (len > 0 && strncmp(path, "-", MAXPATH) != 0)
+      safestrcpy(p->sbpath, path, sizeof(p->sbpath));
+    else
+      p->sbpath[0] = 0;
+    p->sbactive = 1;
+  }
+
+  return 0;
+}
+
 // return how many clock tick interrupts have occurred
 // since start.
 uint64
