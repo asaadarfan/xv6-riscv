@@ -203,6 +203,10 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_sync\
+	$U/_sleep\
+	$U/_sixfive\
+	$U/_memdump\
+	$U/_find\
 
 
 
@@ -278,14 +282,11 @@ UPROGS += \
 endif
 
 UEXTRA=
-ifeq ($(LAB),util)
-	UEXTRA += user/findtest.sh
-	UEXTRA += user/sixfive.txt
-	UPROGS += $U/_memdump
-endif
-ifeq ($(LAB),syscall)
-	UEXTRA += user/exec.sh
-endif
+# Assignment 2 keeps both labs on one branch, so include the Task 1 data
+# files (and the Task 2 exec.sh) in the image regardless of LAB.
+UEXTRA += user/findtest.sh
+UEXTRA += user/sixfive.txt
+UEXTRA += user/exec.sh
 
 fs.img: mkfs/mkfs README $(UEXTRA) $(UPROGS)
 	mkfs/mkfs fs.img README $(UEXTRA) $(UPROGS)
