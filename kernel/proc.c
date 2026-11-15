@@ -131,6 +131,18 @@ found:
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // Allocate the page shared read-only with user space at USYSCALL,
+  // so that ugetpid() can read the pid without entering the kernel.
+  if ((p->usyscall = (struct usyscall *)kalloc()) == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  memset(p->usyscall, 0, PGSIZE);
+  p->usyscall->pid = p->pid;
+#endif
+
 #ifdef LAB_LOCK
   p->pincpu = 0;
 #endif
@@ -161,6 +173,11 @@ freeproc(struct proc *p)
   if (p->trapframe)
     kfree((void *)p->trapframe);
   p->trapframe = 0;
+#ifdef LAB_PGTBL
+  if (p->usyscall)
+    kfree((void *)p->usyscall);
+  p->usyscall = 0;
+#endif
   if (p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -204,6 +221,17 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // map the usyscall page just below the trapframe page.
+  // user may only read it (PTE_R | PTE_U, no PTE_W / PTE_X).
+  if (mappages(pagetable, USYSCALL, PGSIZE, (uint64)(p->usyscall),
+               PTE_R | PTE_U) < 0) {
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+#endif
 
   return pagetable;
 }
@@ -215,6 +243,11 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+#ifdef LAB_PGTBL
+  // the usyscall page itself is freed by freeproc(), not here,
+  // because exec() swaps page tables while keeping the same proc.
+  uvmunmap(pagetable, USYSCALL, 1, 0);
+#endif
   uvmfree(pagetable, sz);
 }
 

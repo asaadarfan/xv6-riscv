@@ -148,13 +148,130 @@ walkaddr(pagetable_t pagetable, uint64 va)
 
 
 #if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
+// Print the valid PTEs of one page-table page, then recurse into
+// the page-table pages they point to. level is the Sv39 level of
+// pagetable (2 for the root), and va is the first virtual address
+// covered by pagetable.
+static void
+vmprintlevel(pagetable_t pagetable, int level, uint64 va)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) == 0)
+      continue;
+
+    uint64 a = va + ((uint64)i << PXSHIFT(level));
+    int leaf = (pte & (PTE_R | PTE_W | PTE_X)) != 0;
+
+    // one " .." per level of depth below the root.
+    for (int d = level; d <= 2; d++)
+      printk(" ..");
+    printk("%p: pte %p pa %p ", (void *)a, (void *)pte, (void *)PTE2PA(pte));
+    if (leaf) {
+      if (pte & PTE_R)
+        printk("R");
+      if (pte & PTE_W)
+        printk("W");
+      if (pte & PTE_X)
+        printk("X");
+      if (pte & PTE_U)
+        printk("U");
+      // a leaf above level 0 maps a superpage (2MB at level 1).
+      if (level > 0)
+        printk(" superpage");
+    }
+    printk("\n");
+
+    // a non-leaf PTE points to the next lower level's page-table page.
+    if (!leaf && level > 0)
+      vmprintlevel((pagetable_t)PTE2PA(pte), level - 1, a);
+  }
+}
+
+// Print the contents of a page table, one line per valid PTE,
+// indented by its depth in the tree.
 void
 vmprint(pagetable_t pagetable)
 {
-  // your code here
+  printk("page table %p\n", (void *)pagetable);
+  vmprintlevel(pagetable, 2, 0);
 }
 #endif
 
+#ifdef LAB_PGTBL
+// Like walk(), but stop one level early and return the address of
+// the level-1 PTE for va, which can map a 2MB superpage.
+// If alloc!=0, create the level-1 page-table page if needed.
+static pte_t *
+superwalk(pagetable_t pagetable, uint64 va, int alloc)
+{
+  if (va >= MAXVA)
+    panic("superwalk");
+
+  pte_t *pte = &pagetable[PX(2, va)];
+  if (*pte & PTE_V) {
+    if (*pte & (PTE_R | PTE_W | PTE_X))
+      panic("superwalk: level-2 leaf");
+    pagetable = (pagetable_t)PTE2PA(*pte);
+  } else {
+    if (!alloc || (pagetable = (pde_t *)kalloc()) == 0)
+      return 0;
+    memset(pagetable, 0, PGSIZE);
+    *pte = PA2PTE(pagetable) | PTE_V;
+  }
+  return &pagetable[PX(1, va)];
+}
+
+// Kernel-only version of mappages(), called only by kvmmap().
+// Maps [va, va+size) to [pa, pa+size), using a 2MB superpage
+// wherever va and pa are both superpage-aligned and at least
+// SUPERPGSIZE bytes remain, and ordinary 4KB pages elsewhere.
+// User page tables never use superpages.
+// Returns 0 on success, -1 if a page-table page couldn't be allocated.
+static int
+kmappages(pagetable_t kpgtbl, uint64 va, uint64 size, uint64 pa, int perm)
+{
+  uint64 a, end;
+  pte_t *pte;
+
+  if ((va % PGSIZE) != 0)
+    panic("kmappages: va not aligned");
+
+  if ((size % PGSIZE) != 0)
+    panic("kmappages: size not aligned");
+
+  if (size == 0)
+    panic("kmappages: size");
+
+  a = va;
+  end = va + size;
+  while (a < end) {
+    if ((a % SUPERPGSIZE) == 0 && (pa % SUPERPGSIZE) == 0 &&
+        end - a >= SUPERPGSIZE) {
+      // a level-1 leaf PTE maps the whole 2MB.
+      if ((pte = superwalk(kpgtbl, a, 1)) == 0)
+        return -1;
+      if (*pte & PTE_V)
+        panic("kmappages: remap");
+      *pte = PA2PTE(pa) | perm | PTE_V;
+      a += SUPERPGSIZE;
+      pa += SUPERPGSIZE;
+    } else {
+      // walk() returns an existing superpage PTE if a falls inside
+      // one, so overlapping mappings are still caught as remaps.
+      if ((pte = walk(kpgtbl, a, 1)) == 0)
+        return -1;
+      if (*pte & PTE_V)
+        panic("kmappages: remap");
+      *pte = PA2PTE(pa) | perm | PTE_V;
+      a += PGSIZE;
+      pa += PGSIZE;
+    }
+  }
+  return 0;
+}
+#endif
 
 // add a mapping to the kernel page table.
 // only used when booting.
@@ -162,7 +279,11 @@ vmprint(pagetable_t pagetable)
 void
 kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
 {
+#ifdef LAB_PGTBL
+  if (kmappages(kpgtbl, va, sz, pa, perm) != 0)
+#else
   if (mappages(kpgtbl, va, sz, pa, perm) != 0)
+#endif
     panic("kvmmap");
 }
 
